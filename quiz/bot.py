@@ -7,7 +7,17 @@ from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandle
 from quiz.models import Quiz, UserQuizAnswer, Question, Animal
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Привет!")
+    keyboard = [[InlineKeyboardButton("Узнать моё тотемное животное", callback_data="start_quiz")]]
+    markup = InlineKeyboardMarkup(keyboard)
+    text = (
+        "Добро пожаловать в бот Московского Зоопарка!\n\n"
+        "С помощью нашей небольшой викторины мы постараемся определить, "
+        "какое животное может стать твоим тотемным.\n\n"
+        "Отвечай на вопросы и по итогам узнаешь, "
+        "какой зверь ближе всего по характеру именно тебе!\n\n"
+        "Чтобы начать, нажми на кнопку ниже."
+    )
+    await update.message.reply_text(text, reply_markup=markup)
 
 @sync_to_async
 def get_active_quiz():
@@ -59,7 +69,7 @@ def calculate_result(user_id, quiz_id):
         return None
 
     max_count = max(counts.values())
-    max_ids = [aid for aid, cnt in counts.items() if cnt == max_count]
+    max_ids: list[int] = [aid for aid, cnt in counts.items() if cnt == max_count]
     chosen_id = random.choice(max_ids)
     return Animal.objects.filter(id=chosen_id).first()
 
@@ -105,6 +115,11 @@ async def quiz_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await show_question(update, context, quiz, question)
+
+async def start_quiz_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await quiz_command(update, context)
 
 async def quiz_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -152,6 +167,7 @@ def run_bot():
     app = ApplicationBuilder().token(settings.TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("quiz", quiz_command))
+    app.add_handler(CallbackQueryHandler(start_quiz_callback, pattern="^start_quiz$"))
     app.add_handler(CallbackQueryHandler(quiz_callback, pattern="^quiz:"))
 
     app.post_init = post_init
