@@ -9,8 +9,7 @@ from urllib.parse import quote
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [[InlineKeyboardButton("Узнать моё тотемное животное", callback_data="start_quiz")]]
-    markup = InlineKeyboardMarkup(keyboard)
+    markup = InlineKeyboardMarkup([[InlineKeyboardButton("Узнать моё тотемное животное", callback_data="start_quiz")]])
     text = (
         "Добро пожаловать в бот Московского Зоопарка!\n\n"
         "С помощью нашей небольшой викторины мы постараемся определить, "
@@ -181,12 +180,13 @@ async def quiz_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             share_text_encoded = quote(share_text, safe='')
             image_url_encoded = quote(animal.image_url, safe='')
             vk_share_url = f"https://vk.com/share.php?url={bot_url_encoded}&title={share_text_encoded}&image={image_url_encoded}"
-            share_markup = InlineKeyboardMarkup([[InlineKeyboardButton("Поделиться в VK", url=vk_share_url)]])
+            markup = InlineKeyboardMarkup([[InlineKeyboardButton("Поделиться в VK", url=vk_share_url)], [
+                InlineKeyboardButton("Попробовать ещё раз?", callback_data="start_quiz")]])
             try:
                 await context.bot.send_photo(chat_id=update.effective_chat.id, photo=animal.image_url,
-                                             caption=result_text, reply_markup=share_markup)
+                                             caption=result_text, reply_markup=markup)
             except BadRequest:
-                await query.message.reply_text(result_text, reply_markup=share_markup)
+                await query.message.reply_text(result_text, reply_markup=markup)
 
         await cleanup_user_answers(user_id, quiz_id)
         last_msg_id = context.user_data.get("last_message_id")
