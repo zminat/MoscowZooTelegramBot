@@ -102,7 +102,17 @@ async def show_question(update: Update, context: ContextTypes.DEFAULT_TYPE,
     msg = await update.effective_message.reply_text(text=question.text, reply_markup=markup)
     context.user_data["last_message_id"] = msg.message_id
 
+async def clear_last_quiz_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    last_msg_id = context.user_data.get("last_message_id")
+    if last_msg_id:
+        try:
+            await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=last_msg_id)
+        except BadRequest:
+            pass
+        context.user_data["last_message_id"] = None
+
 async def quiz_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await clear_last_quiz_message(update, context)
     quiz = await get_active_quiz()
     if not quiz:
         await update.message.reply_text("Нет активной викторины!")
@@ -117,6 +127,7 @@ async def quiz_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await show_question(update, context, quiz, question)
 
 async def start_quiz_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await clear_last_quiz_message(update, context)
     query = update.callback_query
     await query.answer()
     await quiz_command(update, context)
