@@ -82,14 +82,21 @@ def calculate_result(user_id, quiz_id):
     return Animal.objects.filter(id=chosen_id).first()
 
 
+async def clear_current_question_message(update: Update, context: ContextTypes.DEFAULT_TYPE, message_id: int = None):
+    if message_id is None:
+        message_id = context.user_data.get("current_question_message_id")
+    if message_id:
+        try:
+            await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=message_id)
+        except BadRequest:
+            pass
+        context.user_data["current_question_message_id"] = None
+
+
 async def show_question(update: Update, context: ContextTypes.DEFAULT_TYPE,
                         quiz, question, previous_message_id=None):
     if previous_message_id:
-        try:
-            await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=previous_message_id)
-        except BadRequest:
-            pass
-
+        await clear_current_question_message(update, context, previous_message_id)
     answers = await get_answers_for_question(question)
     if not answers:
         await update.effective_message.reply_text("Ошибка: у вопроса нет вариантов ответа!")
@@ -109,21 +116,11 @@ async def show_question(update: Update, context: ContextTypes.DEFAULT_TYPE,
     markup = InlineKeyboardMarkup(keyboard)
 
     msg = await update.effective_message.reply_text(text=question.text, reply_markup=markup)
-    context.user_data["last_message_id"] = msg.message_id
-
-
-async def clear_last_quiz_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    last_msg_id = context.user_data.get("last_message_id")
-    if last_msg_id:
-        try:
-            await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=last_msg_id)
-        except BadRequest:
-            pass
-        context.user_data["last_message_id"] = None
+    context.user_data["current_question_message_id"] = msg.message_id
 
 
 async def quiz_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await clear_last_quiz_message(update, context)
+    await clear_current_question_message(update, context)
     quiz = await get_active_quiz()
     if not quiz:
         await update.message.reply_text("Нет активной викторины!")
@@ -139,62 +136,78 @@ async def quiz_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def start_quiz_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await clear_last_quiz_message(update, context)
+    await clear_current_question_message(update, context)
     query = update.callback_query
     await query.answer()
     await quiz_command(update, context)
 
 
-async def quiz_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    user_id = update.effective_user.id
-    data = query.data
+async def parse_quiz_callback_data(data: str):
     if not data.startswith("quiz:"):
-        return
-
+        return None
     payload = data[5:]
-    quiz_id_str, question_id_str, answer_id_str = payload.split("|")
-    quiz_id = int(quiz_id_str)
-    question_id = int(question_id_str)
-    answer_id = int(answer_id_str)
-    await store_user_answer(user_id, quiz_id, question_id, answer_id)
+    try:
+        quiz_id_str, question_id_str, answer_id_str = payload.split("|")
+    except ValueError:
+        return None
+    return int(quiz_id_str), int(question_id_str), int(answer_id_str)
 
+
+async def get_result_markup(animal, context):
+    bot_info = await context.bot.get_me()
+    bot_url = f"https://t.me/{bot_info.username}"
+    bot_url_encoded = quote(bot_url, safe='')
+    share_text = f"Моё тотемное животное в Московском зоопарке – {animal.name}. Хочешь узнать своё?"
+    share_text_encoded = quote(share_text, safe='')
+    image_url_encoded = quote(animal.image_url, safe='')
+    vk_share_url = f"https://vk.com/share.php?url={bot_url_encoded}&title={share_text_encoded}&image={image_url_encoded}"
+    markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("Поделиться в VK", url=vk_share_url)],
+        [InlineKeyboardButton("Попробовать ещё раз?", callback_data="start_quiz")]
+    ])
+    return markup
+
+
+async def end_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int, quiz_id: int):
+    query = update.callback_query
+    animal = await calculate_result(user_id, quiz_id)
+    if not animal:
+        await query.message.reply_text("Мы не смогли определить ваше животное!")
+    else:
+        result_text = f"Твоё тотемное животное в Московском зоопарке – {animal.name}"
+        markup = await get_result_markup(animal, context)
+        try:
+            await context.bot.send_photo(chat_id=update.effective_chat.id, photo=animal.image_url,
+                                         caption=result_text, reply_markup=markup)
+        except BadRequest:
+            await query.message.reply_text(result_text, reply_markup=markup)
+    await cleanup_user_answers(user_id, quiz_id)
+    await clear_current_question_message(update, context)
+
+
+async def process_quiz_answer(update: Update, context: ContextTypes.DEFAULT_TYPE,
+                              quiz_id: int, question_id: int, answer_id: int):
+    user_id = update.effective_user.id
+    await store_user_answer(user_id, quiz_id, question_id, answer_id)
     quiz = await sync_to_async(Quiz.objects.get)(pk=quiz_id)
     question = await sync_to_async(Question.objects.get)(pk=question_id)
     next_q = await get_next_question(quiz, question)
     if next_q:
-        last_msg_id = context.user_data.get("last_message_id")
-        await show_question(update, context, quiz, next_q, previous_message_id=last_msg_id)
+        msg_id = context.user_data.get("current_question_message_id")
+        await show_question(update, context, quiz, next_q, previous_message_id=msg_id)
     else:
-        animal = await calculate_result(user_id, quiz_id)
-        if not animal:
-            await query.message.reply_text("Мы не смогли определить ваше животное!")
-        else:
-            result_text = f"Вы больше всего похожи на: {animal.name}"
-            bot_info = await context.bot.get_me()
-            bot_url = f"https://t.me/{bot_info.username}"
-            bot_url_encoded = quote(bot_url, safe='')
-            share_text = f"Я - {animal.name}. Хочешь узнать кто ты? Тогда пройди викторину московского зоопарка."
-            share_text_encoded = quote(share_text, safe='')
-            image_url_encoded = quote(animal.image_url, safe='')
-            vk_share_url = f"https://vk.com/share.php?url={bot_url_encoded}&title={share_text_encoded}&image={image_url_encoded}"
-            markup = InlineKeyboardMarkup([[InlineKeyboardButton("Поделиться в VK", url=vk_share_url)], [
-                InlineKeyboardButton("Попробовать ещё раз?", callback_data="start_quiz")]])
-            try:
-                await context.bot.send_photo(chat_id=update.effective_chat.id, photo=animal.image_url,
-                                             caption=result_text, reply_markup=markup)
-            except BadRequest:
-                await query.message.reply_text(result_text, reply_markup=markup)
+        await end_quiz(update, context, user_id, quiz_id)
 
-        await cleanup_user_answers(user_id, quiz_id)
-        last_msg_id = context.user_data.get("last_message_id")
-        if last_msg_id:
-            try:
-                await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=last_msg_id)
-            except BadRequest:
-                pass
+
+async def quiz_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    parsed = await parse_quiz_callback_data(data)
+    if not parsed:
+        return
+    quiz_id, question_id, answer_id = parsed
+    await process_quiz_answer(update, context, quiz_id, question_id, answer_id)
 
 
 async def post_init(application):
