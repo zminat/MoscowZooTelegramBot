@@ -1,9 +1,16 @@
 from django.contrib import admin
+from django.utils.html import mark_safe
 from .models import Animal, Question, Answer, QuizQuestion, Quiz
+
 
 @admin.register(Animal)
 class AnimalAdmin(admin.ModelAdmin):
-    list_display = ('id', 'name')
+    list_display = ('id', 'name', 'image_preview')
+
+    def image_preview(self, obj):
+        return mark_safe(f'<img src="{obj.image_url}" width="100" style="object-fit: contain;" />')
+
+    image_preview.short_description = "Изображение"
 
 
 class AnswerInline(admin.TabularInline):
@@ -21,6 +28,7 @@ class QuestionAdmin(admin.ModelAdmin):
         return ", ".join(answer.text for answer in obj.answers.all())
 
     answers_list.short_description = "Ответы"
+
 
 @admin.register(Answer)
 class AnswerAdmin(admin.ModelAdmin):

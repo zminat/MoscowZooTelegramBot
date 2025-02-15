@@ -5,6 +5,8 @@ from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, BotComm
 from telegram.error import BadRequest
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
 from quiz.models import Quiz, UserQuizAnswer, Question, Animal
+from urllib.parse import quote
+
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton("Узнать моё тотемное животное", callback_data="start_quiz")]]
@@ -19,22 +21,27 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(text, reply_markup=markup)
 
+
 @sync_to_async
 def get_active_quiz():
     return Quiz.objects.filter(is_active=True).first()
 
+
 @sync_to_async
 def cleanup_user_answers(user_id, quiz_id):
     UserQuizAnswer.objects.filter(telegram_user_id=user_id, quiz_id=quiz_id).delete()
+
 
 @sync_to_async
 def get_first_question(quiz):
     qq = quiz.quiz_questions.order_by("order").first()
     return qq.question if qq else None
 
+
 @sync_to_async
 def get_answers_for_question(question):
     return list(question.answers.all())
+
 
 @sync_to_async
 def store_user_answer(user_id, quiz_id, question_id, answer_id):
@@ -45,6 +52,7 @@ def store_user_answer(user_id, quiz_id, question_id, answer_id):
         answer_id=answer_id
     )
 
+
 @sync_to_async
 def get_next_question(quiz, question):
     current_qq = quiz.quiz_questions.filter(question=question).first()
@@ -53,6 +61,7 @@ def get_next_question(quiz, question):
 
     next_qq = quiz.quiz_questions.filter(order__gt=current_qq.order).order_by("order").first()
     return next_qq.question if next_qq else None
+
 
 @sync_to_async
 def calculate_result(user_id, quiz_id):
@@ -72,6 +81,7 @@ def calculate_result(user_id, quiz_id):
     max_ids: list[int] = [aid for aid, cnt in counts.items() if cnt == max_count]
     chosen_id = random.choice(max_ids)
     return Animal.objects.filter(id=chosen_id).first()
+
 
 async def show_question(update: Update, context: ContextTypes.DEFAULT_TYPE,
                         quiz, question, previous_message_id=None):
@@ -102,6 +112,7 @@ async def show_question(update: Update, context: ContextTypes.DEFAULT_TYPE,
     msg = await update.effective_message.reply_text(text=question.text, reply_markup=markup)
     context.user_data["last_message_id"] = msg.message_id
 
+
 async def clear_last_quiz_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     last_msg_id = context.user_data.get("last_message_id")
     if last_msg_id:
@@ -110,6 +121,7 @@ async def clear_last_quiz_message(update: Update, context: ContextTypes.DEFAULT_
         except BadRequest:
             pass
         context.user_data["last_message_id"] = None
+
 
 async def quiz_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await clear_last_quiz_message(update, context)
@@ -126,11 +138,13 @@ async def quiz_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await show_question(update, context, quiz, question)
 
+
 async def start_quiz_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await clear_last_quiz_message(update, context)
     query = update.callback_query
     await query.answer()
     await quiz_command(update, context)
+
 
 async def quiz_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -159,7 +173,20 @@ async def quiz_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not animal:
             await query.message.reply_text("Мы не смогли определить ваше животное!")
         else:
-            await query.message.reply_text(f"Вы больше всего похожи на: {animal.name}")
+            result_text = f"Вы больше всего похожи на: {animal.name}"
+            bot_info = await context.bot.get_me()
+            bot_url = f"https://t.me/{bot_info.username}"
+            bot_url_encoded = quote(bot_url, safe='')
+            share_text = f"Я - {animal.name}. Хочешь узнать кто ты? Тогда пройди викторину московского зоопарка."
+            share_text_encoded = quote(share_text, safe='')
+            image_url_encoded = quote(animal.image_url, safe='')
+            vk_share_url = f"https://vk.com/share.php?url={bot_url_encoded}&title={share_text_encoded}&image={image_url_encoded}"
+            share_markup = InlineKeyboardMarkup([[InlineKeyboardButton("Поделиться в VK", url=vk_share_url)]])
+            try:
+                await context.bot.send_photo(chat_id=update.effective_chat.id, photo=animal.image_url,
+                                             caption=result_text, reply_markup=share_markup)
+            except BadRequest:
+                await query.message.reply_text(result_text, reply_markup=share_markup)
 
         await cleanup_user_answers(user_id, quiz_id)
         last_msg_id = context.user_data.get("last_message_id")
@@ -169,10 +196,12 @@ async def quiz_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except BadRequest:
                 pass
 
+
 async def post_init(application):
     await application.bot.set_my_commands([
         BotCommand("quiz", "Викторина"),
     ])
+
 
 def run_bot():
     app = ApplicationBuilder().token(settings.TELEGRAM_TOKEN).build()
