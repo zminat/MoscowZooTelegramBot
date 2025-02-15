@@ -1,7 +1,7 @@
 import random
 from asgiref.sync import sync_to_async
 from django.conf import settings
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, BotCommand
 from telegram.error import BadRequest
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
 from quiz.models import Quiz, UserQuizAnswer, Question, Animal
@@ -143,9 +143,17 @@ async def quiz_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except BadRequest:
                 pass
 
+async def post_init(application):
+    await application.bot.set_my_commands([
+        BotCommand("quiz", "Викторина"),
+    ])
+
 def run_bot():
     app = ApplicationBuilder().token(settings.TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("quiz", quiz_command))
     app.add_handler(CallbackQueryHandler(quiz_callback, pattern="^quiz:"))
+
+    app.post_init = post_init
+
     app.run_polling()
