@@ -7,6 +7,11 @@ class Animal(models.Model):
         verbose_name='Наименование животного',
         unique=True
     )
+    page_url = models.URLField(
+        verbose_name="Ссылка на страницу животного",
+        blank=False,
+        null=False
+    )
     image_url = models.URLField(
         verbose_name="Ссылка на изображение",
         blank=False,

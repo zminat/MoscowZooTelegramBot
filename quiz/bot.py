@@ -174,13 +174,13 @@ async def end_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: 
     if not animal:
         await query.message.reply_text("Мы не смогли определить ваше животное!")
     else:
-        result_text = f"Твоё тотемное животное в Московском зоопарке – {animal.name}"
+        result_text = f"Твоё тотемное животное в Московском зоопарке – <a href='{animal.page_url}'>{animal.name}</a>."
         markup = await get_result_markup(animal, context)
         try:
-            await context.bot.send_photo(chat_id=update.effective_chat.id, photo=animal.image_url,
-                                         caption=result_text, reply_markup=markup)
+            await context.bot.send_photo(chat_id=update.effective_chat.id, photo=animal.image_url, caption=result_text,
+                                         reply_markup=markup, parse_mode="HTML")
         except BadRequest:
-            await query.message.reply_text(result_text, reply_markup=markup)
+            await query.message.reply_text(result_text, reply_markup=markup, parse_mode="HTML")
     await cleanup_user_answers(user_id, quiz_id)
     await clear_current_question_message(update, context)
 

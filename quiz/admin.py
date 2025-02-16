@@ -5,7 +5,12 @@ from .models import Animal, Question, Answer, QuizQuestion, Quiz
 
 @admin.register(Animal)
 class AnimalAdmin(admin.ModelAdmin):
-    list_display = ('id', 'name', 'image_preview')
+    list_display = ('id', 'name', 'page_link', 'image_preview')
+
+    def page_link(self, obj):
+        return mark_safe(f'<a href="{obj.page_url}" target="_blank">{obj.name}</a>')
+
+    page_link.short_description = "Страница животного"
 
     def image_preview(self, obj):
         return mark_safe(f'<img src="{obj.image_url}" width="100" style="object-fit: contain;" />')
