@@ -154,6 +154,7 @@ async def parse_quiz_callback_data(data: str):
 
 
 async def get_result_markup(animal, context):
+    guardianship_url = "https://moscowzoo.ru/about/guardianship"
     bot_info = await context.bot.get_me()
     bot_url = f"https://t.me/{bot_info.username}"
     bot_url_encoded = quote(bot_url, safe='')
@@ -162,10 +163,20 @@ async def get_result_markup(animal, context):
     image_url_encoded = quote(animal.image_url, safe='')
     vk_share_url = f"https://vk.com/share.php?url={bot_url_encoded}&title={share_text_encoded}&image={image_url_encoded}"
     markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("Узнать больше", url=settings.GUARDIANSHIP_URL)],
         [InlineKeyboardButton("Поделиться в VK", url=vk_share_url)],
         [InlineKeyboardButton("Попробовать ещё раз?", callback_data="start_quiz")]
     ])
     return markup
+
+
+def build_guardianship_text(include_link: bool = True):
+    message_start = "Если ты хочешь помочь в сохранении биоразнообразия Земли, то прими участие в программе"
+    link_text = "«Клуб друзей зоопарка»"
+    if include_link:
+        guardianship_url = settings.GUARDIANSHIP_URL
+        link_text = f"<a href='{guardianship_url}'>{link_text}</a>"
+    return f"{message_start} {link_text}."
 
 
 async def end_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int, quiz_id: int):
@@ -174,7 +185,10 @@ async def end_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: 
     if not animal:
         await query.message.reply_text("Мы не смогли определить ваше животное!")
     else:
-        result_text = f"Твоё тотемное животное в Московском зоопарке – <a href='{animal.page_url}'>{animal.name}</a>."
+        result_text = (
+            f"Твоё тотемное животное в Московском зоопарке – <a href='{animal.page_url}'>{animal.name}</a>.\n\n"
+            f"{build_guardianship_text(False)}"
+        )
         markup = await get_result_markup(animal, context)
         try:
             await context.bot.send_photo(chat_id=update.effective_chat.id, photo=animal.image_url, caption=result_text,
@@ -210,9 +224,15 @@ async def quiz_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await process_quiz_answer(update, context, quiz_id, question_id, answer_id)
 
 
+async def guardianship_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = build_guardianship_text(True)
+    await update.message.reply_text(text, parse_mode="HTML")
+
+
 async def post_init(application):
     await application.bot.set_my_commands([
         BotCommand("quiz", "Викторина"),
+        BotCommand("guardianship", "Опекунство"),
     ])
 
 
@@ -220,6 +240,7 @@ def run_bot():
     app = ApplicationBuilder().token(settings.TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("quiz", quiz_command))
+    app.add_handler(CommandHandler("guardianship", guardianship_command))
     app.add_handler(CallbackQueryHandler(start_quiz_callback, pattern="^start_quiz$"))
     app.add_handler(CallbackQueryHandler(quiz_callback, pattern="^quiz:"))
 

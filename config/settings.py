@@ -22,6 +22,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = 'django-insecure-4e9z-nkpmzgpw+$3eca%wmn2lpo#xi@!&l0dkaza!ef_m4sb_e'
 TELEGRAM_TOKEN = ''
+GUARDIANSHIP_URL = 'https://moscowzoo.ru/about/guardianship'
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
