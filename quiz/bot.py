@@ -3,9 +3,13 @@ from asgiref.sync import sync_to_async
 from django.conf import settings
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, BotCommand
 from telegram.error import BadRequest
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes, ConversationHandler, \
+    MessageHandler, filters
 from quiz.models import Quiz, UserQuizAnswer, Question, Animal
 from urllib.parse import quote
+
+TELEGRAM_BASE_URL = "https://t.me/"
+FEEDBACK = 1
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -154,16 +158,16 @@ async def parse_quiz_callback_data(data: str):
 
 
 async def get_result_markup(animal, context):
-    guardianship_url = "https://moscowzoo.ru/about/guardianship"
+    guardianship_url = settings.GUARDIANSHIP_URL
     bot_info = await context.bot.get_me()
-    bot_url = f"https://t.me/{bot_info.username}"
+    bot_url = f"{TELEGRAM_BASE_URL}{bot_info.username}"
     bot_url_encoded = quote(bot_url, safe='')
     share_text = f"Моё тотемное животное в Московском зоопарке – {animal.name}. Хочешь узнать своё?"
     share_text_encoded = quote(share_text, safe='')
     image_url_encoded = quote(animal.image_url, safe='')
     vk_share_url = f"https://vk.com/share.php?url={bot_url_encoded}&title={share_text_encoded}&image={image_url_encoded}"
     markup = InlineKeyboardMarkup([
-        [InlineKeyboardButton("Узнать больше", url=settings.GUARDIANSHIP_URL)],
+        [InlineKeyboardButton("Узнать больше", url=guardianship_url)],
         [InlineKeyboardButton("Поделиться в VK", url=vk_share_url)],
         [InlineKeyboardButton("Попробовать ещё раз?", callback_data="start_quiz")]
     ])
@@ -229,10 +233,48 @@ async def guardianship_command(update: Update, context: ContextTypes.DEFAULT_TYP
     await update.message.reply_text(text, parse_mode="HTML")
 
 
+async def process_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE, feedback_text: str) -> None:
+    user = update.effective_user
+    if user.username:
+        link_url = f"{TELEGRAM_BASE_URL}{user.username}"
+    else:
+        link_url = f"tg://user?id={user.id}"
+    user_link = f'<a href="{link_url}">{link_url}</a>'
+    message_text = f"Feedback от {user_link}:\n{feedback_text}"
+    admin_chat_id = settings.ADMIN_CHAT_ID
+    if not admin_chat_id:
+        await update.message.reply_text("Обратная связь не настроена.")
+        return
+    await context.bot.send_message(chat_id=admin_chat_id, text=message_text, parse_mode="HTML")
+    await update.message.reply_text("Спасибо за вашу обратную связь!")
+
+
+async def feedback_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if context.args:
+        feedback_text = " ".join(context.args)
+        await process_feedback(update, context, feedback_text)
+        return ConversationHandler.END
+    else:
+        await update.message.reply_text("Пожалуйста, введите текст обратной связи:")
+        return FEEDBACK
+
+
+async def receive_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    feedback_text = update.message.text
+    await process_feedback(update, context, feedback_text)
+    return ConversationHandler.END
+
+
+async def cancel_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await update.message.reply_text("Обратная связь отменена.")
+    return ConversationHandler.END
+
+
 async def post_init(application):
     await application.bot.set_my_commands([
         BotCommand("quiz", "Викторина"),
         BotCommand("guardianship", "Опекунство"),
+        BotCommand("feedback", "Обратная связь"),
     ])
 
 
@@ -240,9 +282,18 @@ def run_bot():
     app = ApplicationBuilder().token(settings.TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("quiz", quiz_command))
-    app.add_handler(CommandHandler("guardianship", guardianship_command))
     app.add_handler(CallbackQueryHandler(start_quiz_callback, pattern="^start_quiz$"))
     app.add_handler(CallbackQueryHandler(quiz_callback, pattern="^quiz:"))
+    app.add_handler(CommandHandler("guardianship", guardianship_command))
+
+    feedback_handler = ConversationHandler(
+        entry_points=[CommandHandler("feedback", feedback_command)],
+        states={
+            FEEDBACK: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_feedback)]
+        },
+        fallbacks=[CommandHandler("cancel", cancel_feedback)]
+    )
+    app.add_handler(feedback_handler)
 
     app.post_init = post_init
 
