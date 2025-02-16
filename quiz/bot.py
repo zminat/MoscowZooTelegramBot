@@ -1,5 +1,5 @@
 import random
-from asgiref.sync import sync_to_async
+from asgiref.sync import sync_to_async, async_to_sync
 from django.conf import settings
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, BotCommand
 from telegram.error import BadRequest
@@ -9,7 +9,7 @@ from quiz.models import Quiz, UserQuizAnswer, Question, Animal
 from urllib.parse import quote
 
 TELEGRAM_BASE_URL = "https://t.me/"
-FEEDBACK = 1
+CONTACT, FEEDBACK = range(2)
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -67,6 +67,11 @@ def get_next_question(quiz, question):
 
 
 @sync_to_async
+def get_animal_by_id(animal_id):
+    return Animal.objects.filter(id=animal_id).first()
+
+
+@sync_to_async
 def calculate_result(user_id, quiz_id):
     user_answers = UserQuizAnswer.objects.filter(telegram_user_id=user_id, quiz_id=quiz_id)
     if not user_answers.exists():
@@ -83,7 +88,7 @@ def calculate_result(user_id, quiz_id):
     max_count = max(counts.values())
     max_ids: list[int] = [aid for aid, cnt in counts.items() if cnt == max_count]
     chosen_id = random.choice(max_ids)
-    return Animal.objects.filter(id=chosen_id).first()
+    return async_to_sync(get_animal_by_id)(chosen_id)
 
 
 async def clear_current_question_message(update: Update, context: ContextTypes.DEFAULT_TYPE, message_id: int = None):
@@ -157,8 +162,10 @@ async def parse_quiz_callback_data(data: str):
     return int(quiz_id_str), int(question_id_str), int(answer_id_str)
 
 
-async def get_result_markup(animal, context):
+async def build_result_markup(animal, context):
     guardianship_url = settings.GUARDIANSHIP_URL
+    animal_id = animal.id
+    contact_guardianship_callback_data = f"contact_guardianship:{animal_id}"
     bot_info = await context.bot.get_me()
     bot_url = f"{TELEGRAM_BASE_URL}{bot_info.username}"
     bot_url_encoded = quote(bot_url, safe='')
@@ -168,6 +175,7 @@ async def get_result_markup(animal, context):
     vk_share_url = f"https://vk.com/share.php?url={bot_url_encoded}&title={share_text_encoded}&image={image_url_encoded}"
     markup = InlineKeyboardMarkup([
         [InlineKeyboardButton("Узнать больше", url=guardianship_url)],
+        [InlineKeyboardButton("Связаться по опеке", callback_data=contact_guardianship_callback_data)],
         [InlineKeyboardButton("Поделиться в VK", url=vk_share_url)],
         [InlineKeyboardButton("Попробовать ещё раз?", callback_data="start_quiz")]
     ])
@@ -190,10 +198,10 @@ async def end_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: 
         await query.message.reply_text("Мы не смогли определить ваше животное!")
     else:
         result_text = (
-            f"Твоё тотемное животное в Московском зоопарке – <a href='{animal.page_url}'>{animal.name}</a>.\n\n"
-            f"{build_guardianship_text(False)}"
+                f"Твоё тотемное животное в Московском зоопарке – <a href='{animal.page_url}'>{animal.name}</a>.\n\n" +
+                build_guardianship_text(False)
         )
-        markup = await get_result_markup(animal, context)
+        markup = await build_result_markup(animal, context)
         try:
             await context.bot.send_photo(chat_id=update.effective_chat.id, photo=animal.image_url, caption=result_text,
                                          reply_markup=markup, parse_mode="HTML")
@@ -233,13 +241,60 @@ async def guardianship_command(update: Update, context: ContextTypes.DEFAULT_TYP
     await update.message.reply_text(text, parse_mode="HTML")
 
 
-async def process_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE, feedback_text: str) -> None:
-    user = update.effective_user
+async def build_user_profile_link(user):
     if user.username:
         link_url = f"{TELEGRAM_BASE_URL}{user.username}"
     else:
         link_url = f"tg://user?id={user.id}"
-    user_link = f'<a href="{link_url}">{link_url}</a>'
+    return f'<a href="{link_url}">{link_url}</a>'
+
+
+async def contact_guardianship_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.answer()
+    data = update.callback_query.data
+    if data:
+        animal_id = data[21:]
+        context.user_data["contact_animal_id"] = animal_id
+    else:
+        context.user_data["contact_animal_id"] = None
+    await update.callback_query.message.reply_text(
+        "Пожалуйста, введите сообщение для сотрудника зоопарка по опеке (или /cancel для отмены):"
+    )
+    return CONTACT
+
+
+async def contact_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Пожалуйста, введите сообщение для сотрудника зоопарка (или /cancel для отмены):")
+    return CONTACT
+
+
+async def cancel_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Сообщение для сотрудника зоопарка отменено.")
+    return ConversationHandler.END
+
+
+async def receive_contact_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    user_link = await build_user_profile_link(user)
+    contact_message = update.message.text
+    animal_info = ""
+    animal_id = context.user_data.get("contact_animal_id")
+    if animal_id:
+        animal = await get_animal_by_id(animal_id)
+        animal_info = f"\n\nТотемное животное: {animal.name}."
+    message_text = f"Сообщение по опеке от {user_link}:{animal_info}\n\nСообщение:\n{contact_message}"
+    admin_chat_id = settings.ADMIN_CHAT_ID
+    if not admin_chat_id:
+        await update.message.reply_text("Обратная связь не настроена.")
+    else:
+        await context.bot.send_message(chat_id=admin_chat_id, text=message_text, parse_mode="HTML")
+        await update.message.reply_text("Ваше сообщение отправлено сотруднику зоопарка!")
+    return ConversationHandler.END
+
+
+async def process_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE, feedback_text: str):
+    user = update.effective_user
+    user_link = await build_user_profile_link(user)
     message_text = f"Feedback от {user_link}:\n{feedback_text}"
     admin_chat_id = settings.ADMIN_CHAT_ID
     if not admin_chat_id:
@@ -255,7 +310,7 @@ async def feedback_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await process_feedback(update, context, feedback_text)
         return ConversationHandler.END
     else:
-        await update.message.reply_text("Пожалуйста, введите текст обратной связи:")
+        await update.message.reply_text("Пожалуйста, введите текст обратной связи (или /cancel для отмены):")
         return FEEDBACK
 
 
@@ -265,7 +320,7 @@ async def receive_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
-async def cancel_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def cancel_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Обратная связь отменена.")
     return ConversationHandler.END
 
@@ -274,6 +329,7 @@ async def post_init(application):
     await application.bot.set_my_commands([
         BotCommand("quiz", "Викторина"),
         BotCommand("guardianship", "Опекунство"),
+        BotCommand("contact", "Связаться по опеке"),
         BotCommand("feedback", "Обратная связь"),
     ])
 
@@ -285,6 +341,18 @@ def run_bot():
     app.add_handler(CallbackQueryHandler(start_quiz_callback, pattern="^start_quiz$"))
     app.add_handler(CallbackQueryHandler(quiz_callback, pattern="^quiz:"))
     app.add_handler(CommandHandler("guardianship", guardianship_command))
+
+    contact_handler = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(contact_guardianship_callback, pattern="^contact_guardianship:"),
+            CommandHandler("contact", contact_command)
+        ],
+        states={
+            CONTACT: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_contact_message)]
+        },
+        fallbacks=[CommandHandler("cancel", cancel_contact)]
+    )
+    app.add_handler(contact_handler)
 
     feedback_handler = ConversationHandler(
         entry_points=[CommandHandler("feedback", feedback_command)],
