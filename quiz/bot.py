@@ -1,6 +1,7 @@
 import random
 from asgiref.sync import sync_to_async, async_to_sync
 from django.conf import settings
+from django.core.cache import cache
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, BotCommand
 from telegram.error import BadRequest
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes, ConversationHandler, \
@@ -8,6 +9,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandle
 from quiz.models import Quiz, UserQuizAnswer, Question, Animal
 from urllib.parse import quote
 
+CACHE_TIMEOUT = 300
 TELEGRAM_BASE_URL = "https://t.me/"
 CONTACT, FEEDBACK = range(2)
 
@@ -27,7 +29,12 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @sync_to_async
 def get_active_quiz():
-    return Quiz.objects.filter(is_active=True).first()
+    cache_key = "active_quiz"
+    quiz = cache.get(cache_key)
+    if quiz is None:
+        quiz = Quiz.objects.filter(is_active=True).first()
+        cache.set(cache_key, quiz, timeout=CACHE_TIMEOUT)
+    return quiz
 
 
 @sync_to_async
@@ -37,13 +44,23 @@ def cleanup_user_answers(user_id, quiz_id):
 
 @sync_to_async
 def get_first_question(quiz):
-    qq = quiz.quiz_questions.order_by("order").first()
-    return qq.question if qq else None
+    cache_key = f"first_question_{quiz.id}"
+    first_question = cache.get(cache_key)
+    if first_question is None:
+        qq = quiz.quiz_questions.order_by("order").first()
+        first_question = qq.question if qq else None
+        cache.set(cache_key, first_question, timeout=CACHE_TIMEOUT)
+    return first_question
 
 
 @sync_to_async
 def get_answers_for_question(question):
-    return list(question.answers.all())
+    cache_key = f"answers_for_question_{question.id}"
+    answers = cache.get(cache_key)
+    if answers is None:
+        answers = list(question.answers.all())
+        cache.set(cache_key, answers, timeout=CACHE_TIMEOUT)
+    return answers
 
 
 @sync_to_async
@@ -58,17 +75,29 @@ def store_user_answer(user_id, quiz_id, question_id, answer_id):
 
 @sync_to_async
 def get_next_question(quiz, question):
+    cache_key = f"next_question_{quiz.id}_{question.id}"
+    next_question = cache.get(cache_key)
+    if next_question is not None:
+        return next_question
+
     current_qq = quiz.quiz_questions.filter(question=question).first()
     if not current_qq:
         return None
 
     next_qq = quiz.quiz_questions.filter(order__gt=current_qq.order).order_by("order").first()
-    return next_qq.question if next_qq else None
+    next_question = next_qq.question if next_qq else None
+    cache.set(cache_key, next_question, timeout=CACHE_TIMEOUT)
+    return next_question
 
 
 @sync_to_async
 def get_animal_by_id(animal_id):
-    return Animal.objects.filter(id=animal_id).first()
+    cache_key = f"animal_{animal_id}"
+    animal = cache.get(cache_key)
+    if animal is None:
+        animal = Animal.objects.filter(id=animal_id).first()
+        cache.set(cache_key, animal, timeout=CACHE_TIMEOUT)
+    return animal
 
 
 @sync_to_async

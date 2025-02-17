@@ -88,7 +88,8 @@ class Quiz(models.Model):
     )
     is_active = models.BooleanField(
         default=True,
-        verbose_name="Активен"
+        verbose_name="Активен",
+        db_index=True
     )
     questions = models.ManyToManyField(
         Question,
