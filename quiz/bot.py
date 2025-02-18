@@ -27,7 +27,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Добро пожаловать в бот Московского Зоопарка!\n\n"
         "С помощью нашей небольшой викторины мы постараемся определить, "
         "какое животное может стать твоим тотемным.\n\n"
-        "Отвечай на вопросы и по итогам узнаешь, "
+        "Отвечай на вопросы и узнаешь, "
         "какой зверь ближе всего по характеру именно тебе!\n\n"
         "Чтобы начать, нажми на кнопку ниже."
     )
@@ -225,7 +225,7 @@ async def build_result_markup(animal, context):
     vk_share_url = f"https://vk.com/share.php?url={bot_url_encoded}&title={share_text_encoded}&image={image_url_encoded}"
     markup = InlineKeyboardMarkup([
         [InlineKeyboardButton("Узнать больше", url=guardianship_url)],
-        [InlineKeyboardButton("Связаться по опеке", callback_data=contact_guardianship_callback_data)],
+        [InlineKeyboardButton("Задать вопрос об опеке", callback_data=contact_guardianship_callback_data)],
         [InlineKeyboardButton("Поделиться в VK", url=vk_share_url)],
         [InlineKeyboardButton("Попробовать ещё раз?", callback_data="start_quiz")]
     ])
@@ -301,7 +301,7 @@ async def quiz_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def guardianship_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = build_guardianship_text(True)
     await update.message.reply_text(text, parse_mode="HTML")
-    logger.log_info(f"Пользователь {update.effective_user.id} запросил информацию по опеке")
+    logger.log_info(f"Пользователь {update.effective_user.id} задал вопрос об опеке")
 
 
 async def build_user_profile_link(user):
@@ -318,11 +318,11 @@ async def contact_guardianship_callback(update: Update, context: ContextTypes.DE
     if data:
         animal_id = data[21:]
         context.user_data["contact_animal_id"] = animal_id
-        logger.log_info(f"Пользователь {update.effective_user.id} запросил связь по опеке для животного {animal_id}")
+        logger.log_info(f"Пользователь {update.effective_user.id} задал вопрос об опеке над животным {animal_id}")
     else:
         context.user_data["contact_animal_id"] = None
     await update.callback_query.message.reply_text(
-        "Пожалуйста, введите сообщение для сотрудника зоопарка по опеке (или /cancel для отмены):"
+        "Пожалуйста, введите сообщение для сотрудника зоопарка про опеку животных (или /cancel для отмены):"
     )
     return CONTACT
 
@@ -335,7 +335,7 @@ async def contact_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cancel_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Сообщение для сотрудника зоопарка отменено.")
-    logger.log_info(f"Пользователь {update.effective_user.id} отменил отправку сообщения для опеки")
+    logger.log_info(f"Пользователь {update.effective_user.id} отменил отправку сообщения про опеку")
     return ConversationHandler.END
 
 
@@ -348,7 +348,7 @@ async def receive_contact_message(update: Update, context: ContextTypes.DEFAULT_
     if animal_id:
         animal = await get_animal_by_id(animal_id)
         animal_info = f"\n\nТотемное животное: {animal.name}."
-    message_text = f"📞 Сообщение по опеке от {user_link}:{animal_info}\n\nСообщение:\n{contact_message}"
+    message_text = f"📞 Сообщение про опеку от {user_link}:{animal_info}\n\nСообщение:\n{contact_message}"
     admin_chat_id = settings.ADMIN_CHAT_ID
     if not admin_chat_id:
         await update.message.reply_text("Обратная связь не настроена.")
@@ -358,7 +358,7 @@ async def receive_contact_message(update: Update, context: ContextTypes.DEFAULT_
     else:
         await context.bot.send_message(chat_id=admin_chat_id, text=message_text, parse_mode="HTML")
         await update.message.reply_text("Ваше сообщение отправлено сотруднику зоопарка!")
-        logger.log_info(f"Пользователь {user.id} отправил сообщение для опеки")
+        logger.log_info(f"Пользователь {user.id} отправил сообщение про опеку")
     return ConversationHandler.END
 
 
@@ -404,7 +404,7 @@ async def post_init(application):
     await application.bot.set_my_commands([
         BotCommand("quiz", "Викторина"),
         BotCommand("guardianship", "Опекунство"),
-        BotCommand("contact", "Связаться по опеке"),
+        BotCommand("contact", "Задать вопрос об опеке"),
         BotCommand("feedback", "Обратная связь"),
     ])
     logger.log_info("Бот инициализирован: команды установлены")
