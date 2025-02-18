@@ -1,5 +1,10 @@
+import os
 from django.contrib import admin
 from django.utils.html import mark_safe
+from django.conf import settings
+from django.http import HttpResponse, HttpResponseNotFound
+from django.urls import path
+from django.contrib.admin.views.decorators import staff_member_required
 from .models import Animal, Question, Answer, QuizQuestion, Quiz
 
 
@@ -66,3 +71,26 @@ class QuizAdmin(admin.ModelAdmin):
         return ", ".join(q.text for q in questions)
 
     questions_list.short_description = "Вопросы"
+
+
+@staff_member_required
+def download_log_view(request):
+    log_file_path = os.path.join(settings.BASE_DIR, 'bot.log')
+    if os.path.exists(log_file_path):
+        with open(log_file_path, 'rb') as f:
+            response = HttpResponse(f.read(), content_type='text/plain')
+            response['Content-Disposition'] = 'attachment; filename=bot.log'
+            return response
+    else:
+        return HttpResponseNotFound("Лог файл не найден.")
+
+
+def get_admin_urls(urls):
+    custom_urls = [
+        path('download-log/', download_log_view, name='download-log'),
+    ]
+    return custom_urls + urls
+
+
+admin_urls = admin.site.get_urls()
+admin.site.get_urls = lambda: get_admin_urls(admin_urls)

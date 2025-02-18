@@ -8,14 +8,21 @@ from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandle
     MessageHandler, filters
 from quiz.models import Quiz, UserQuizAnswer, Question, Animal
 from urllib.parse import quote
+from .bot_logger import BotLogger
 
 CACHE_TIMEOUT = 300
 TELEGRAM_BASE_URL = "https://t.me/"
 CONTACT, FEEDBACK = range(2)
 
+logger = BotLogger('bot.log')
+
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    markup = InlineKeyboardMarkup([[InlineKeyboardButton("Узнать моё тотемное животное", callback_data="start_quiz")]])
+    user = update.effective_user
+    logger.log_info(f"Пользователь {user.id} запустил команду /start")
+    markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("Узнать моё тотемное животное", callback_data="start_quiz")]
+    ])
     text = (
         "Добро пожаловать в бот Московского Зоопарка!\n\n"
         "С помощью нашей небольшой викторины мы постараемся определить, "
@@ -126,8 +133,10 @@ async def clear_current_question_message(update: Update, context: ContextTypes.D
     if message_id:
         try:
             await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=message_id)
-        except BadRequest:
-            pass
+        except BadRequest as e:
+            error_msg = f"Ошибка при удалении сообщения: {e}"
+            logger.log_error(error_msg)
+            await notify_admin_error(error_msg, context)
         context.user_data["current_question_message_id"] = None
 
 
@@ -138,6 +147,9 @@ async def show_question(update: Update, context: ContextTypes.DEFAULT_TYPE,
     answers = await get_answers_for_question(question)
     if not answers:
         await update.effective_message.reply_text("Ошибка: у вопроса нет вариантов ответа!")
+        error_msg = f"Вопрос {question.id} не содержит ответов"
+        logger.log_error(error_msg)
+        await notify_admin_error(error_msg, context)
         return
 
     keyboard = []
@@ -155,6 +167,7 @@ async def show_question(update: Update, context: ContextTypes.DEFAULT_TYPE,
 
     msg = await update.effective_message.reply_text(text=question.text, reply_markup=markup)
     context.user_data["current_question_message_id"] = msg.message_id
+    logger.log_debug(f"Отправлен вопрос {question.id} пользователю {update.effective_user.id}")
 
 
 async def quiz_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -162,14 +175,21 @@ async def quiz_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     quiz = await get_active_quiz()
     if not quiz:
         await update.message.reply_text("Нет активной викторины!")
+        error_msg = "Попытка начать викторину, но активной викторины не найдено"
+        logger.log_error(error_msg)
+        await notify_admin_error(error_msg, context)
         return
 
     await cleanup_user_answers(update.effective_user.id, quiz.id)
     question = await get_first_question(quiz)
     if not question:
         await update.message.reply_text("В викторине нет вопросов.")
+        error_msg = f"В викторине {quiz.id} нет вопросов"
+        logger.log_error(error_msg)
+        await notify_admin_error(error_msg, context)
         return
 
+    logger.log_info(f"Пользователь {update.effective_user.id} начал викторину {quiz.id}")
     await show_question(update, context, quiz, question)
 
 
@@ -177,6 +197,7 @@ async def start_quiz_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     await clear_current_question_message(update, context)
     query = update.callback_query
     await query.answer()
+    logger.log_debug(f"Callback start_quiz получен от пользователя {update.effective_user.id}")
     await quiz_command(update, context)
 
 
@@ -225,6 +246,9 @@ async def end_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: 
     animal = await calculate_result(user_id, quiz_id)
     if not animal:
         await query.message.reply_text("Мы не смогли определить ваше животное!")
+        error_msg = f"Не удалось определить тотемное животное для пользователя {user_id} в викторине {quiz_id}"
+        logger.log_error(error_msg)
+        await notify_admin_error(error_msg, context)
     else:
         result_text = (
                 f"Твоё тотемное животное в Московском зоопарке – <a href='{animal.page_url}'>{animal.name}</a>.\n\n" +
@@ -234,8 +258,12 @@ async def end_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: 
         try:
             await context.bot.send_photo(chat_id=update.effective_chat.id, photo=animal.image_url, caption=result_text,
                                          reply_markup=markup, parse_mode="HTML")
-        except BadRequest:
+        except BadRequest as e:
+            error_msg = f"Ошибка отправки фото: {e}"
+            logger.log_error(error_msg)
+            await notify_admin_error(error_msg, context)
             await query.message.reply_text(result_text, reply_markup=markup, parse_mode="HTML")
+        logger.log_info(f"Пользователю {user_id} определено тотемное животное: {animal.name}")
     await cleanup_user_answers(user_id, quiz_id)
     await clear_current_question_message(update, context)
 
@@ -243,6 +271,7 @@ async def end_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: 
 async def process_quiz_answer(update: Update, context: ContextTypes.DEFAULT_TYPE,
                               quiz_id: int, question_id: int, answer_id: int):
     user_id = update.effective_user.id
+    logger.log_info(f"Пользователь {user_id} ответил на вопрос {question_id} (ответ {answer_id}) в викторине {quiz_id}")
     await store_user_answer(user_id, quiz_id, question_id, answer_id)
     quiz = await sync_to_async(Quiz.objects.get)(pk=quiz_id)
     question = await sync_to_async(Question.objects.get)(pk=question_id)
@@ -258,8 +287,12 @@ async def quiz_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     data = query.data
+    logger.log_debug(f"Получен quiz callback: {data} от пользователя {update.effective_user.id}")
     parsed = await parse_quiz_callback_data(data)
     if not parsed:
+        error_msg = f"Ошибка разбора callback данных: {data}"
+        logger.log_error(error_msg)
+        await notify_admin_error(error_msg, context)
         return
     quiz_id, question_id, answer_id = parsed
     await process_quiz_answer(update, context, quiz_id, question_id, answer_id)
@@ -268,6 +301,7 @@ async def quiz_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def guardianship_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = build_guardianship_text(True)
     await update.message.reply_text(text, parse_mode="HTML")
+    logger.log_info(f"Пользователь {update.effective_user.id} запросил информацию по опеке")
 
 
 async def build_user_profile_link(user):
@@ -284,6 +318,7 @@ async def contact_guardianship_callback(update: Update, context: ContextTypes.DE
     if data:
         animal_id = data[21:]
         context.user_data["contact_animal_id"] = animal_id
+        logger.log_info(f"Пользователь {update.effective_user.id} запросил связь по опеке для животного {animal_id}")
     else:
         context.user_data["contact_animal_id"] = None
     await update.callback_query.message.reply_text(
@@ -294,11 +329,13 @@ async def contact_guardianship_callback(update: Update, context: ContextTypes.DE
 
 async def contact_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Пожалуйста, введите сообщение для сотрудника зоопарка (или /cancel для отмены):")
+    logger.log_info(f"Пользователь {update.effective_user.id} инициировал контакт через команду /contact")
     return CONTACT
 
 
 async def cancel_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Сообщение для сотрудника зоопарка отменено.")
+    logger.log_info(f"Пользователь {update.effective_user.id} отменил отправку сообщения для опеки")
     return ConversationHandler.END
 
 
@@ -311,26 +348,34 @@ async def receive_contact_message(update: Update, context: ContextTypes.DEFAULT_
     if animal_id:
         animal = await get_animal_by_id(animal_id)
         animal_info = f"\n\nТотемное животное: {animal.name}."
-    message_text = f"Сообщение по опеке от {user_link}:{animal_info}\n\nСообщение:\n{contact_message}"
+    message_text = f"📞 Сообщение по опеке от {user_link}:{animal_info}\n\nСообщение:\n{contact_message}"
     admin_chat_id = settings.ADMIN_CHAT_ID
     if not admin_chat_id:
         await update.message.reply_text("Обратная связь не настроена.")
+        error_msg = "ADMIN_CHAT_ID не настроен, сообщение не отправлено"
+        logger.log_error(error_msg)
+        await notify_admin_error(error_msg, context)
     else:
         await context.bot.send_message(chat_id=admin_chat_id, text=message_text, parse_mode="HTML")
         await update.message.reply_text("Ваше сообщение отправлено сотруднику зоопарка!")
+        logger.log_info(f"Пользователь {user.id} отправил сообщение для опеки")
     return ConversationHandler.END
 
 
 async def process_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE, feedback_text: str):
     user = update.effective_user
     user_link = await build_user_profile_link(user)
-    message_text = f"Feedback от {user_link}:\n{feedback_text}"
+    message_text = f"💬 Обратная связь от {user_link}:\n{feedback_text}"
     admin_chat_id = settings.ADMIN_CHAT_ID
     if not admin_chat_id:
         await update.message.reply_text("Обратная связь не настроена.")
+        error_msg = "ADMIN_CHAT_ID не настроен для обработки обратной связи"
+        logger.log_error(error_msg)
+        await notify_admin_error(error_msg, context)
         return
     await context.bot.send_message(chat_id=admin_chat_id, text=message_text, parse_mode="HTML")
     await update.message.reply_text("Спасибо за вашу обратную связь!")
+    logger.log_info(f"Получена обратная связь от пользователя {user.id}")
 
 
 async def feedback_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -351,6 +396,7 @@ async def receive_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cancel_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Обратная связь отменена.")
+    logger.log_info(f"Пользователь {update.effective_user.id} отменил отправку обратной связи")
     return ConversationHandler.END
 
 
@@ -361,6 +407,18 @@ async def post_init(application):
         BotCommand("contact", "Связаться по опеке"),
         BotCommand("feedback", "Обратная связь"),
     ])
+    logger.log_info("Бот инициализирован: команды установлены")
+
+
+async def notify_admin_error(error_message: str, context: ContextTypes.DEFAULT_TYPE):
+    admin_chat_id = settings.ADMIN_CHAT_ID
+    if not admin_chat_id:
+        logger.log_error("ADMIN_CHAT_ID не настроен для отправки оповещений.")
+        return
+    try:
+        await context.bot.send_message(chat_id=admin_chat_id, text=f"❗️ Оповещение об ошибке:\n{error_message}")
+    except Exception as e:
+        logger.log_error(f"Ошибка отправки оповещения админу: {e}")
 
 
 def run_bot():
@@ -394,4 +452,5 @@ def run_bot():
 
     app.post_init = post_init
 
+    logger.log_info("Запуск бота")
     app.run_polling()
